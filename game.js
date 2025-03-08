@@ -123,6 +123,42 @@ const DIVISION_STATS = {
     }
 };
 
+// 在游戏常量部分添加歹徒类型
+const CRIMINAL_TYPES = {
+    REGULAR: 'regular',
+    HEAVY: 'heavy',
+    SNIPER: 'sniper'
+};
+
+// 添加歹徒类型属性
+const CRIMINAL_STATS = {
+    [CRIMINAL_TYPES.REGULAR]: {
+        health: 100,
+        speed: RIOTER_BASE_SPEED,
+        color: '#8B0000',
+        damage: 10,
+        width: 30,
+        height: 50
+    },
+    [CRIMINAL_TYPES.HEAVY]: {
+        health: 200,
+        speed: RIOTER_BASE_SPEED * 0.7,
+        color: '#660000',
+        damage: 20,
+        width: 35,
+        height: 55
+    },
+    [CRIMINAL_TYPES.SNIPER]: {
+        health: 80,
+        speed: RIOTER_BASE_SPEED * 1.2,
+        color: '#990000',
+        damage: 15,
+        width: 28,
+        height: 48,
+        attackRange: 400
+    }
+};
+
 // Game state
 let gameState = {
     player: {
@@ -434,21 +470,40 @@ function attack(targetX, targetY) {
 
 // Update spawnMoreRioters function
 function spawnMoreRioters() {
-    const baseY = GROUND_LEVEL; // Base ground level for rioters
-    const spawnWidth = 400; // Width of spawn area
-    const spawnStartX = SPAWN_DISTANCE; // Starting X position for spawn area
+    const baseY = GROUND_LEVEL; // 歹徒的基础地面高度
+    const spawnWidth = 400; // 生成区域宽度
+    const spawnStartX = SPAWN_DISTANCE; // 生成区域起始X坐标
 
-    for (let i = 0; i < 50; i++) { // Reduced number for better performance
+    // 生成不同类型的歹徒
+    for (let i = 0; i < 30; i++) { // 减少数量以提高性能
+        // 随机选择歹徒类型
+        let type = CRIMINAL_TYPES.REGULAR;
+        const rand = Math.random();
+        
+        if (rand > 0.85) {
+            type = CRIMINAL_TYPES.HEAVY;
+        } else if (rand > 0.7) {
+            type = CRIMINAL_TYPES.SNIPER;
+        }
+        
+        const stats = CRIMINAL_STATS[type];
+        
         const rioter = {
             x: spawnStartX + Math.random() * spawnWidth,
-            y: baseY - 50, // 50 is rioter height
-            width: 30,
-            height: 50,
-            speed: RIOTER_BASE_SPEED + Math.random() * 0.5, // Reduced speed variation
-            health: 100,
+            y: baseY - stats.height,
+            width: stats.width,
+            height: stats.height,
+            speed: stats.speed + Math.random() * 0.3, // 添加一点随机速度变化
+            health: stats.health,
+            maxHealth: stats.health,
+            damage: stats.damage,
             velocityY: 0,
-            active: gameState.mission.phase === 'combat', // Activate if combat has started
-            isJumping: false
+            active: gameState.mission.phase === 'combat', // 如果战斗已开始则激活
+            isJumping: false,
+            lastAttackTime: 0, // 修复bug：添加攻击冷却时间
+            attackCooldown: 1000 + Math.random() * 500, // 随机攻击冷却时间
+            type: type,
+            attackRange: stats.attackRange || 50 // 默认攻击范围为50，狙击手有特殊范围
         };
 
         gameState.rioters.push(rioter);
@@ -557,19 +612,21 @@ function update() {
     });
 
     // Update rioters
-    gameState.rioters.forEach(rioter => {
+    gameState.rioters.forEach((rioter, index) => {
         if (!rioter.active) return;
 
-        // Find nearest target (player or officer)
+        const currentTime = Date.now();
+        
+        // 寻找最近的目标（玩家或警官）
         let nearestTarget = gameState.player;
         let minDistance = Infinity;
 
-        // Check distance to player
+        // 检查与玩家的距离
         const dxPlayer = gameState.player.x - rioter.x;
         const dyPlayer = gameState.player.y - rioter.y;
         minDistance = Math.sqrt(dxPlayer * dxPlayer + dyPlayer * dyPlayer);
 
-        // Check distance to officers
+        // 检查与警官的距离
         gameState.officers.forEach(officer => {
             if (!officer.inTruck) {
                 const dx = officer.x - rioter.x;
@@ -583,26 +640,81 @@ function update() {
             }
         });
 
-        // Move towards nearest target
+        // 向最近的目标移动
         if (nearestTarget) {
             const dx = nearestTarget.x - rioter.x;
-            rioter.x += Math.sign(dx) * rioter.speed;
+            
+            // 修复bug：确保歹徒不会堆叠在一起
+            let shouldMove = true;
+            gameState.rioters.forEach(otherRioter => {
+                if (otherRioter !== rioter) {
+                    const distance = Math.abs(otherRioter.x - rioter.x);
+                    if (distance < 20) {
+                        shouldMove = Math.random() > 0.5; // 50%的几率移动以避免堆叠
+                    }
+                }
+            });
+            
+            if (shouldMove) {
+                rioter.x += Math.sign(dx) * rioter.speed;
+            }
 
-            // Apply gravity
+            // 应用重力
             rioter.velocityY += GRAVITY;
             rioter.y += rioter.velocityY;
 
-            // Ground collision
+            // 地面碰撞
             if (rioter.y > GROUND_LEVEL - rioter.height) {
                 rioter.y = GROUND_LEVEL - rioter.height;
                 rioter.velocityY = 0;
                 rioter.isJumping = false;
             }
 
-            // Random jumping
+            // 随机跳跃
             if (!rioter.isJumping && Math.random() < 0.01) {
                 rioter.velocityY = JUMP_FORCE;
                 rioter.isJumping = true;
+            }
+            
+            // 攻击逻辑 - 修复bug：添加攻击冷却
+            if (minDistance <= rioter.attackRange) {
+                if (currentTime - rioter.lastAttackTime >= rioter.attackCooldown) {
+                    // 对目标造成伤害
+                    if (nearestTarget === gameState.player && !gameState.player.shieldActive) {
+                        gameState.player.health -= rioter.damage;
+                        if (gameState.player.health <= 0) {
+                            gameState.player.health = 0;
+                            // 游戏结束逻辑
+                        }
+                    } else if (nearestTarget !== gameState.player) {
+                        // 攻击警官
+                        nearestTarget.health -= rioter.damage;
+                        if (nearestTarget.health <= 0) {
+                            // 移除死亡的警官
+                            const officerIndex = gameState.officers.indexOf(nearestTarget);
+                            if (officerIndex !== -1) {
+                                gameState.officers.splice(officerIndex, 1);
+                            }
+                        }
+                    }
+                    
+                    // 更新最后攻击时间
+                    rioter.lastAttackTime = currentTime;
+                    
+                    // 添加攻击效果
+                    gameState.effects.push({
+                        type: 'attack',
+                        x: nearestTarget.x,
+                        y: nearestTarget.y,
+                        duration: 10
+                    });
+                }
+            }
+            
+            // 狙击手特殊行为
+            if (rioter.type === CRIMINAL_TYPES.SNIPER && minDistance < 300) {
+                // 狙击手尝试保持距离
+                rioter.x -= Math.sign(dx) * rioter.speed;
             }
         }
     });
@@ -867,36 +979,62 @@ function drawGround(ctx) {
 function drawPlayer(ctx, player) {
     const screenX = player.x - gameState.camera.x;
     
-    // Body
-    ctx.fillStyle = '#1a478c';
+    // 改进SWAT外观
+    // 身体
+    ctx.fillStyle = '#0a2a5e'; // 更深的蓝色
     ctx.fillRect(screenX, player.y, player.width, player.height);
     
-    // Riot gear
-    // Vest
-    ctx.fillStyle = '#2a579c';
+    // 战术背心
+    ctx.fillStyle = '#1a478c';
     ctx.fillRect(screenX, player.y + 15, player.width, player.height - 25);
+    
+    // 添加战术装备细节
+    ctx.fillStyle = '#000';
+    // 弹药袋
+    ctx.fillRect(screenX + 2, player.y + 20, 8, 15);
+    ctx.fillRect(screenX + player.width - 10, player.y + 20, 8, 15);
+    
+    // POLICE文字
     ctx.fillStyle = '#fff';
     ctx.font = '8px Arial';
-    ctx.fillText('POLICE', screenX + 2, player.y + 28);
+    ctx.fillText('SWAT', screenX + 2, player.y + 28);
     
-    // Helmet
-    ctx.fillStyle = '#2a579c';
+    // 改进头盔
+    ctx.fillStyle = '#1a3c70';
     ctx.beginPath();
     ctx.ellipse(screenX + player.width/2, player.y + 10, 15, 12, 0, 0, Math.PI * 2);
     ctx.fill();
     
-    // Visor
-    ctx.fillStyle = '#111111';
-    ctx.fillRect(screenX + 5, player.y + 5, 20, 8);
+    // 添加战术头盔细节
+    ctx.fillStyle = '#0a2a5e';
+    ctx.fillRect(screenX + 5, player.y + 5, player.width - 10, 5);
     
-    // Shield if active
+    // 改进面罩/护目镜
+    ctx.fillStyle = '#000';
+    ctx.fillRect(screenX + 5, player.y + 5, 20, 8);
+    ctx.fillStyle = '#3498db'; // 蓝色反光护目镜
+    ctx.fillRect(screenX + 7, player.y + 7, 16, 4);
+    
+    // 添加通讯设备
+    ctx.fillStyle = '#333';
+    ctx.fillRect(screenX + player.width - 5, player.y + 8, 3, 10);
+    
+    // 战术腿部装备
+    ctx.fillStyle = '#0a2a5e';
+    ctx.fillRect(screenX + 5, player.y + 35, player.width - 10, 15);
+    
+    // 战术靴
+    ctx.fillStyle = '#000';
+    ctx.fillRect(screenX + 2, player.y + player.height - 10, player.width - 4, 10);
+    
+    // 盾牌如果激活
     if (player.shieldActive) {
-        // Shield frame
+        // 盾牌框架
         ctx.fillStyle = '#4a90e2';
         ctx.strokeStyle = '#2a6ac2';
         ctx.lineWidth = 2;
         
-        // Draw curved riot shield
+        // 绘制弧形防暴盾牌
         ctx.beginPath();
         ctx.moveTo(screenX - 10, player.y - 10);
         ctx.quadraticCurveTo(
@@ -911,13 +1049,13 @@ function drawPlayer(ctx, player) {
         ctx.globalAlpha = 1;
         ctx.stroke();
         
-        // Shield text
+        // 盾牌标志
         ctx.fillStyle = '#fff';
         ctx.font = '10px Arial';
-        ctx.fillText('POLICE', screenX - 8, player.y + 25);
+        ctx.fillText('SWAT', screenX - 8, player.y + 25);
     }
     
-    // Draw weapon
+    // 绘制武器
     drawWeapon(ctx, screenX, player);
 }
 
@@ -925,7 +1063,7 @@ function drawWeapon(ctx, x, player) {
     const weapon = player.inventory[player.currentWeapon];
     const y = player.y + player.height/2;
     
-    // Check if weapon is currently being swung
+    // 检查武器是否正在挥动
     const isSwinging = gameState.effects.some(effect => 
         effect.type === 'meleeSwing' && 
         effect.weapon === weapon
@@ -933,58 +1071,72 @@ function drawWeapon(ctx, x, player) {
     
     switch (weapon) {
         case "SMG":
+            // 改进SMG细节
             ctx.fillStyle = '#111';
+            // 枪管
             ctx.fillRect(x + 25, y - 2, 20, 4);
+            // 枪身
             ctx.fillRect(x + 30, y - 4, 10, 8);
-            ctx.fillRect(x + 28, y + 2, 6, 8); // Magazine
+            // 弹匣
+            ctx.fillRect(x + 28, y + 2, 6, 10);
+            // 瞄准镜
+            ctx.fillStyle = '#333';
+            ctx.fillRect(x + 32, y - 6, 6, 2);
             break;
             
         case "Baton":
+            // 改进警棍细节
             ctx.fillStyle = '#111';
             if (isSwinging) {
-                // Draw baton in swing motion
+                // 绘制挥动中的警棍
                 ctx.save();
                 ctx.translate(x + 25, y);
-                ctx.rotate(Math.PI / 4); // 45-degree swing
+                ctx.rotate(Math.PI / 4); // 45度挥动
                 ctx.fillRect(0, -2, 25, 4);
+                // 添加警棍尖端
+                ctx.fillStyle = '#333';
+                ctx.fillRect(25, -2, 3, 4);
                 ctx.restore();
             } else {
-                // Draw baton in rest position
+                // 绘制静止状态的警棍
                 ctx.fillRect(x + 25, y - 2, 25, 4);
+                // 添加警棍尖端
+                ctx.fillStyle = '#333';
+                ctx.fillRect(x + 50, y - 2, 3, 4);
             }
-            // Handle grip
+            // 手柄握把
             ctx.fillStyle = '#333';
             ctx.fillRect(x + 25, y - 1, 8, 2);
             break;
             
         case "Knife":
             if (isSwinging) {
-                // Draw knife in stabbing motion
+                // 绘制刺击动作的刀
                 ctx.save();
                 ctx.translate(x + 25, y);
-                ctx.rotate(-Math.PI / 6); // -30-degree stab
-                // Blade
-                ctx.fillStyle = '#666';
+                ctx.rotate(-Math.PI / 6); // -30度刺击
+                // 刀刃
+                ctx.fillStyle = '#aaa';
                 ctx.beginPath();
                 ctx.moveTo(0, 0);
                 ctx.lineTo(15, -2);
                 ctx.lineTo(15, 2);
                 ctx.closePath();
                 ctx.fill();
-                // Handle
+                // 刀柄
                 ctx.fillStyle = '#333';
                 ctx.fillRect(0, -1, 5, 2);
                 ctx.restore();
             } else {
-                // Draw knife in rest position
-                ctx.fillStyle = '#666';
+                // 绘制静止状态的刀
+                ctx.fillStyle = '#aaa';
                 ctx.beginPath();
                 ctx.moveTo(x + 25, y);
                 ctx.lineTo(x + 40, y - 2);
                 ctx.lineTo(x + 40, y + 2);
                 ctx.closePath();
                 ctx.fill();
-                // Handle
+                // 刀柄
                 ctx.fillStyle = '#333';
                 ctx.fillRect(x + 25, y - 1, 5, 2);
             }
@@ -1079,32 +1231,86 @@ function drawRioter(ctx, rioter) {
     const screenX = rioter.x - gameState.camera.x;
     
     if (screenX + rioter.width >= 0 && screenX <= CANVAS_WIDTH) {
-        // Body
-        ctx.fillStyle = '#8B0000';
+        const stats = CRIMINAL_STATS[rioter.type];
+        
+        // 身体
+        ctx.fillStyle = stats.color;
         ctx.fillRect(screenX, rioter.y, rioter.width, rioter.height);
         
-        // Hoodie
-        ctx.fillStyle = '#660000';
-        ctx.beginPath();
-        ctx.arc(screenX + rioter.width/2, rioter.y + 10, 12, 0, Math.PI, true);
-        ctx.fill();
+        // 根据类型绘制不同的歹徒特征
+        switch(rioter.type) {
+            case CRIMINAL_TYPES.REGULAR:
+                // 连帽衫
+                ctx.fillStyle = '#660000';
+                ctx.beginPath();
+                ctx.arc(screenX + rioter.width/2, rioter.y + 10, 12, 0, Math.PI, true);
+                ctx.fill();
+                
+                // 帽子阴影
+                ctx.fillStyle = '#4d0000';
+                ctx.beginPath();
+                ctx.arc(screenX + rioter.width/2, rioter.y + 12, 10, 0, Math.PI, true);
+                ctx.fill();
+                
+                // 面具
+                ctx.fillStyle = '#333';
+                ctx.fillRect(screenX + 5, rioter.y + 5, rioter.width - 10, 10);
+                
+                // 添加棒球棍
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(screenX - 15, rioter.y + 20, 15, 5);
+                break;
+                
+            case CRIMINAL_TYPES.HEAVY:
+                // 防弹背心
+                ctx.fillStyle = '#333';
+                ctx.fillRect(screenX + 2, rioter.y + 15, rioter.width - 4, 25);
+                
+                // 头盔
+                ctx.fillStyle = '#333';
+                ctx.beginPath();
+                ctx.arc(screenX + rioter.width/2, rioter.y + 10, 14, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 面具
+                ctx.fillStyle = '#222';
+                ctx.fillRect(screenX + 8, rioter.y + 5, rioter.width - 16, 10);
+                
+                // 添加铁棍
+                ctx.fillStyle = '#777';
+                ctx.fillRect(screenX - 20, rioter.y + 20, 20, 8);
+                break;
+                
+            case CRIMINAL_TYPES.SNIPER:
+                // 轻型装备
+                ctx.fillStyle = '#990000';
+                ctx.fillRect(screenX, rioter.y + 15, rioter.width, 20);
+                
+                // 帽子
+                ctx.fillStyle = '#660000';
+                ctx.beginPath();
+                ctx.arc(screenX + rioter.width/2, rioter.y + 8, 10, 0, Math.PI, true);
+                ctx.fill();
+                
+                // 面具
+                ctx.fillStyle = '#333';
+                ctx.fillRect(screenX + 6, rioter.y + 5, rioter.width - 12, 8);
+                
+                // 添加狙击枪
+                ctx.fillStyle = '#333';
+                ctx.fillRect(screenX - 25, rioter.y + 15, 25, 3);
+                // 瞄准镜
+                ctx.fillStyle = '#111';
+                ctx.fillRect(screenX - 15, rioter.y + 12, 5, 3);
+                break;
+        }
         
-        // Hood shadow
-        ctx.fillStyle = '#4d0000';
-        ctx.beginPath();
-        ctx.arc(screenX + rioter.width/2, rioter.y + 12, 10, 0, Math.PI, true);
-        ctx.fill();
-        
-        // Mask
-        ctx.fillStyle = '#333';
-        ctx.fillRect(screenX + 5, rioter.y + 5, 20, 10);
-        
-        // Health bar with gradient
-        const healthPercentage = rioter.health / 100;
-        // Background
+        // 健康条带渐变
+        const healthPercentage = rioter.health / rioter.maxHealth;
+        // 背景
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         ctx.fillRect(screenX, rioter.y - 15, rioter.width, 5);
-        // Health bar
+        // 健康条
         const healthGradient = ctx.createLinearGradient(screenX, 0, screenX + rioter.width * healthPercentage, 0);
         healthGradient.addColorStop(0, '#ff5e57');
         healthGradient.addColorStop(1, '#ff3f34');
@@ -1644,17 +1850,24 @@ function drawSWATTruck(ctx) {
     const screenX = gameState.mission.truckPosition.x - gameState.camera.x;
     const y = gameState.mission.truckPosition.y;
     
-    // Only draw if on screen
+    // 只有在屏幕上时才绘制
     if (screenX + 200 >= 0 && screenX <= CANVAS_WIDTH) {
-        // Truck body
+        // 卡车底盘
         ctx.fillStyle = '#1a1a1a';
         ctx.fillRect(screenX, y, 160, 80);
         
-        // Armored panels
+        // 装甲板
         ctx.fillStyle = '#2c3e50';
         ctx.fillRect(screenX + 10, y + 10, 140, 60);
         
-        // Windshield
+        // 添加装甲细节
+        ctx.fillStyle = '#34495e';
+        // 装甲板条纹
+        for (let i = 0; i < 3; i++) {
+            ctx.fillRect(screenX + 20, y + 20 + i * 15, 120, 5);
+        }
+        
+        // 前挡风玻璃
         ctx.fillStyle = '#2980b9';
         ctx.beginPath();
         ctx.moveTo(screenX + 120, y + 15);
@@ -1663,52 +1876,68 @@ function drawSWATTruck(ctx) {
         ctx.lineTo(screenX + 120, y + 45);
         ctx.fill();
         
-        // SWAT text
+        // 侧窗（装甲）
+        ctx.fillStyle = '#2980b9';
+        ctx.fillRect(screenX + 20, y + 20, 20, 15);
+        ctx.fillRect(screenX + 50, y + 20, 20, 15);
+        ctx.fillRect(screenX + 80, y + 20, 20, 15);
+        
+        // SWAT文字
         ctx.fillStyle = '#fff';
         ctx.font = '20px Arial';
         ctx.fillText('SWAT', screenX + 50, y + 45);
         
-        // Wheels
+        // 轮子
         ctx.fillStyle = '#333';
         ctx.beginPath();
         ctx.arc(screenX + 30, y + 80, 20, 0, Math.PI * 2);
         ctx.arc(screenX + 130, y + 80, 20, 0, Math.PI * 2);
         ctx.fill();
         
-        // Wheel rims
+        // 轮毂
         ctx.fillStyle = '#666';
         ctx.beginPath();
         ctx.arc(screenX + 30, y + 80, 10, 0, Math.PI * 2);
         ctx.arc(screenX + 130, y + 80, 10, 0, Math.PI * 2);
         ctx.fill();
         
-        // Police lights (flashing if in use)
+        // 警灯（闪烁）
         const lightAlpha = Math.sin(Date.now() / 100) * 0.5 + 0.5;
         
-        // Red light
+        // 红灯
         ctx.fillStyle = `rgba(255, 0, 0, ${lightAlpha})`;
         ctx.fillRect(screenX + 10, y - 10, 20, 10);
         
-        // Blue light
+        // 蓝灯
         ctx.fillStyle = `rgba(0, 0, 255, ${lightAlpha})`;
         ctx.fillRect(screenX + 130, y - 10, 20, 10);
         
-        // Front bumper
+        // 前保险杠
         ctx.fillStyle = '#666';
         ctx.fillRect(screenX + 150, y + 60, 10, 20);
         
-        // Draw interaction hint
+        // 添加装甲格栅
+        ctx.fillStyle = '#444';
+        for (let i = 0; i < 5; i++) {
+            ctx.fillRect(screenX + 152, y + 20 + i * 8, 8, 4);
+        }
+        
+        // 后部装甲门
+        ctx.fillStyle = '#2c3e50';
+        ctx.fillRect(screenX, y + 20, 10, 40);
+        
+        // 绘制交互提示
         if (nearTruck()) {
             ctx.fillStyle = '#fff';
             ctx.font = '14px Arial';
             if (!gameState.mission.inTruck) {
-                ctx.fillText('Press W to enter', screenX + 100, y - 20);
-                // Draw highlight around door
+                ctx.fillText('按W进入', screenX + 100, y - 20);
+                // 在门周围绘制高亮
                 ctx.strokeStyle = '#2ecc71';
                 ctx.lineWidth = 2;
                 ctx.strokeRect(screenX + 115, y + 10, 10, 40);
             } else if (!nearRiot()) {
-                ctx.fillText('Press W to exit', screenX + 100, y - 20);
+                ctx.fillText('按W退出', screenX + 100, y - 20);
             }
         }
     }
