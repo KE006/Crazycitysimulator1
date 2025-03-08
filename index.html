@@ -3,21 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Riot Control Game</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>City Simulator</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <canvas id="gameCanvas"></canvas>
-    <div id="ui">
-        <div id="health">Health: 100</div>
-        <div id="score">Score: 0</div>
-        <div id="grenades">Grenades: 3</div>
-        <div id="medkits">Medkits: 2</div>
-        <div id="weapon">Current Weapon: SMG</div>
-        <div id="shield">Shield: Ready</div>
-        <div id="radio">Radio: Ready</div>
-        <div id="officers">Officers: 20</div>
-        <div id="rioters">Rioters: 50</div>
+    <div id="game-container">
+        <canvas id="game-canvas"></canvas>
+        <div id="inventory" class="hidden">
+            <div class="weapon" data-weapon="gun">Gun</div>
+            <div class="weapon" data-weapon="knife">Knife</div>
+            <div class="weapon" data-weapon="crowbar">Crowbar</div>
+            <div class="weapon" data-weapon="axe">Axe</div>
+            <div class="weapon" data-weapon="fist">Fist</div>
+            <div class="weapon" data-weapon="bomb">Bomb</div>
+        </div>
+        <div id="hud">
+            <div id="current-weapon">Current: Fist</div>
+            <div id="ammo-counter">Ammo: ∞</div>
+            <div id="panic-meter">Panic: 0%</div>
+        </div>
     </div>
     <script src="game.js"></script>
 </body>
